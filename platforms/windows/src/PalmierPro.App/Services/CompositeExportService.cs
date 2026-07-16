@@ -3,6 +3,7 @@ using System.Text.Json;
 using PalmierPro.Core.Models;
 using PalmierPro.Services.Engine;
 using PalmierPro.Services.Export;
+using PalmierPro.Services.Media;
 using PalmierPro.Services.Project;
 
 namespace PalmierPro.App.Services;
@@ -15,6 +16,19 @@ namespace PalmierPro.App.Services;
 /// `TimelineSession.ExportVideo` → `PE_ExportStart`) — see <see cref="ExportVideoAsync"/>.
 public sealed class CompositeExportService : IExportService
 {
+    private readonly Func<PalmierPro.Rendering.EngineSession, ILottieBakeService> _lottieBakeServiceFactory;
+
+    /// <paramref name="lottieBakeServiceFactory"/> builds the Lottie bake service the Video route
+    /// threads into <see cref="TimelineSnapshotBuilder.Build"/> (mirroring how live preview already
+    /// passes one — `PreviewViewModel.RebuildAsync`), defaulting to a real
+    /// <see cref="LottieBakeService"/> bound to the export's OWN fresh
+    /// <see cref="PalmierPro.Rendering.EngineSession"/> — never the live-preview handle
+    /// (docs/export-v1.md §4.1) — and reading the same on-disk `LottieVideos` cache the live document
+    /// already populated. Overridable so tests (and any future non-default composition) can inject a
+    /// fake without a native session. See <see cref="ExportVideoAsync"/> / <see cref="BuildExportSnapshotAsync"/>.
+    public CompositeExportService(Func<PalmierPro.Rendering.EngineSession, ILottieBakeService>? lottieBakeServiceFactory = null) =>
+        _lottieBakeServiceFactory = lottieBakeServiceFactory ?? (session => new LottieBakeService(session));
+
     public Task<ExportResult> ExportAsync(ExportRequest request, IProgress<ExportProgress>? progress = null, CancellationToken ct = default) =>
         request.Destination switch
         {
@@ -34,9 +48,9 @@ public sealed class CompositeExportService : IExportService
     /// branches, this method does not stage `request.OutputPath` itself, only ensures its parent
     /// directory exists first (native's own staging file lives next to it and needs the directory
     /// to already be there — `ExportEncoder::Open`'s `avio_open` does not create directories).
-    private static Task<ExportResult> ExportVideoAsync(ExportRequest request, IProgress<ExportProgress>? progress, CancellationToken ct) =>
+    private Task<ExportResult> ExportVideoAsync(ExportRequest request, IProgress<ExportProgress>? progress, CancellationToken ct) =>
         Task.Run(
-            () =>
+            async () =>
             {
                 ct.ThrowIfCancellationRequested();
                 var timeline = TimelineFor(request);
@@ -44,20 +58,25 @@ public sealed class CompositeExportService : IExportService
                 var resolution = request.Resolution ?? throw new ArgumentException("Video export requires Resolution.", nameof(request));
                 (int width, int height) = resolution.RenderSize(timeline.Width, timeline.Height);
 
-                var built = TimelineSnapshotBuilder.Build(
-                    request.Project, request.TimelineId, request.Resolver, renderSizeOverride: (width, height));
-                byte[] snapshotJson = TimelineSnapshotSerializer.ToJsonBytes(built.Snapshot);
-
-                var options = ExportOptions.Create(codec, width, height, timeline.Fps, request.OutputPath);
-                string optionsJson = BuildOptionsJson(options);
-
                 var directory = Path.GetDirectoryName(Path.GetFullPath(request.OutputPath));
                 if (!string.IsNullOrEmpty(directory))
                 {
                     Directory.CreateDirectory(directory);
                 }
 
+                // The EngineSession is created FIRST (before the snapshot) so the Lottie bake service
+                // can bind to it: unlike the pre-fix ordering, the snapshot build now depends on a
+                // live session so a `.lottie` clip's baked `.mov` is resolved into the snapshot rather
+                // than silently dropped (was: `Build(...)` with no `lottieBakeService`, so every Lottie
+                // clip short-circuited to PendingLottieBakes and vanished from the export).
                 using var engineSession = new PalmierPro.Rendering.EngineSession();
+                var lottieBakeService = _lottieBakeServiceFactory(engineSession);
+                var built = await BuildExportSnapshotAsync(request, (width, height), lottieBakeService, ct).ConfigureAwait(false);
+                byte[] snapshotJson = TimelineSnapshotSerializer.ToJsonBytes(built.Snapshot);
+
+                var options = ExportOptions.Create(codec, width, height, timeline.Fps, request.OutputPath);
+                string optionsJson = BuildOptionsJson(options);
+
                 using PalmierPro.Rendering.TimelineSession nativeTimeline =
                     PalmierPro.Rendering.TimelineSession.Open(engineSession, snapshotJson);
 
@@ -77,6 +96,85 @@ public sealed class CompositeExportService : IExportService
                     UsedHardwareEncoder: report.UsedHardwareEncoder);
             },
             ct);
+
+    /// Builds the export-resolution snapshot, threading <paramref name="bakeService"/> into
+    /// <see cref="TimelineSnapshotBuilder.Build"/> exactly as live preview does — so a `.lottie` clip
+    /// whose bake is already cached resolves to its baked `.mov` inline instead of being dropped
+    /// (the Phase-1 gap this method closes).
+    ///
+    /// Cold-cache behavior — deliberately matched to the Mac's `ExportService`, NOT invented here:
+    /// the Mac composites through `CompositionBuilder.build`, which for each Lottie clip AWAITS
+    /// `LottieVideoGenerator.lottieVideo` (`CompositionBuilder.swift:353-364`) — a synchronous,
+    /// blocking bake-if-not-cached — before the export session is created. So a cold cache does not
+    /// drop the clip; it blocks the export until the bake finishes. We reproduce that: the first
+    /// <see cref="TimelineSnapshotBuilder.Build"/> kicks off a `BakeAsync` for every un-cached Lottie
+    /// clip (reported via <see cref="TimelineSnapshotBuildResult.PendingLottieBakes"/>); we await
+    /// those bakes reaching a terminal state via <see cref="ILottieBakeService.StatusChanged"/>, then
+    /// rebuild so the now-warm cache resolves them. A bake that FAILS is left omitted from the
+    /// snapshot — the Mac's identical posture for unprocessable media (`CompositionBuilder.loadSource`
+    /// returns `.unprocessable`, the composition/export continues without that clip and merely reports
+    /// the ref; `ExportService` never fails the whole job over it).
+    internal static async Task<TimelineSnapshotBuildResult> BuildExportSnapshotAsync(
+        ExportRequest request, (int Width, int Height) renderSize, ILottieBakeService? bakeService, CancellationToken ct)
+    {
+        TimelineSnapshotBuildResult Build() => TimelineSnapshotBuilder.Build(
+            request.Project, request.TimelineId, request.Resolver, bakeService, renderSize);
+
+        if (bakeService is null)
+        {
+            return Build();
+        }
+
+        // MediaRefs whose bake has reached Completed/Failed since we subscribed. A HashSet guarded by
+        // its own lock — StatusChanged can fire from a bake worker thread.
+        var terminal = new HashSet<string>();
+        using var bakeSettled = new SemaphoreSlim(0);
+        void OnStatusChanged(object? sender, LottieBakeStatusChangedEventArgs e)
+        {
+            if (e.Status is LottieBakeStatus.Completed or LottieBakeStatus.Failed)
+            {
+                lock (terminal)
+                {
+                    terminal.Add(e.MediaRef);
+                }
+                bakeSettled.Release();
+            }
+        }
+
+        // Subscribe BEFORE the first Build: Build synchronously calls BakeAsync for each un-cached
+        // clip, and a fast bake could reach a terminal state before the wait loop below would start —
+        // subscribing first guarantees no completion slips through that gap and strands the wait.
+        bakeService.StatusChanged += OnStatusChanged;
+        try
+        {
+            var built = Build();
+            while (built.PendingLottieBakes.Count > 0)
+            {
+                ct.ThrowIfCancellationRequested();
+                bool allSettled;
+                lock (terminal)
+                {
+                    allSettled = built.PendingLottieBakes.All(terminal.Contains);
+                }
+                if (allSettled)
+                {
+                    // Every pending bake finished (Completed or Failed). Rebuild once: Completed refs
+                    // now resolve from the warm cache inline; a Failed ref's cache lookup still misses,
+                    // so it re-enters PendingLottieBakes and stays omitted from the snapshot — Mac
+                    // `.unprocessable` parity (skip the clip, let the export proceed). We return this
+                    // rebuild directly rather than re-entering the loop, so a permanently-failing bake
+                    // can never spin here.
+                    return Build();
+                }
+                await bakeSettled.WaitAsync(ct).ConfigureAwait(false);
+            }
+            return built;
+        }
+        finally
+        {
+            bakeService.StatusChanged -= OnStatusChanged;
+        }
+    }
 
     /// Hand-written, matching docs/export-v1.md §4.2's schema exactly (`Utf8JsonWriter` guarantees
     /// correct escaping of Windows path backslashes/quotes — the codebase's usual convention for

@@ -29,6 +29,13 @@
     <ProjectReference Include="..\PalmierPro.Rendering\PalmierPro.Rendering.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Lets CompositeExportServiceLottieSnapshotTests drive CompositeExportService.BuildExportSnapshotAsync
+         (the export route's snapshot-build seam) directly against a fake ILottieBakeService — the warm-cache
+         Lottie fix is pure C#, but the full ExportVideoAsync around it needs a live native session to run. -->
+    <InternalsVisibleTo Include="PalmierPro.App.Tests" />
+  </ItemGroup>
+
   <!-- `dotnet publish` (unlike `dotnet build`) drops the compiled-XAML .xbf files and the
        app's own resource index (PalmierPro.App.pri) — they land in $(OutDir) but the
        published exe then crashes on its first ms-appx:/// resource load. The WinUI SDK
