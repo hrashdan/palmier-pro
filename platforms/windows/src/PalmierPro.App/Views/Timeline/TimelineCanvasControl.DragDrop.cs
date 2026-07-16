@@ -20,6 +20,20 @@ public sealed partial class TimelineCanvasControl
     private List<MediaAsset>? _externalDragAssets;
     private SnapEngine.SnapState _externalSnapState;
 
+    /// Pointer position for a drop event in the control's DIP "screen" space. `DragEventArgs`
+    /// reports physical pixels (scaled by `XamlRoot.RasterizationScale`) — unlike the pointer/tap
+    /// event args used everywhere else — so it must be divided back down to DIPs before feeding the
+    /// DIP-based geometry math, otherwise the drop indicator drifts from the cursor at >100% display
+    /// scaling. See TimelineDragCoordinates.
+    private Point DragScreenPosition(DragEventArgs e)
+    {
+        var pos = e.GetPosition(Canvas);
+        var scale = Canvas.XamlRoot?.RasterizationScale ?? 1.0;
+        return new Point(
+            TimelineDragCoordinates.ScreenFromRaw(pos.X, scale),
+            TimelineDragCoordinates.ScreenFromRaw(pos.Y, scale));
+    }
+
     private void Canvas_DragLeave(object sender, DragEventArgs e)
     {
         _drag = null;
@@ -56,7 +70,7 @@ public sealed partial class TimelineCanvasControl
             e.DragUIOverride.Caption = _externalDragAssets.Count > 0 ? "Add to Timeline" : "Import";
 
             var geo = BuildGeometry();
-            var pos = e.GetPosition(Canvas);
+            var pos = DragScreenPosition(e);
             var target = geo.DropTargetAt(DocYForScreen(pos.Y));
             var totalDur = _externalDragAssets.Count > 0
                 ? _externalDragAssets.Sum(a => vm.ClipDurationFrames(a, null))
@@ -86,7 +100,7 @@ public sealed partial class TimelineCanvasControl
         try
         {
             var geo = BuildGeometry();
-            var pos = e.GetPosition(Canvas);
+            var pos = DragScreenPosition(e);
             var target = geo.DropTargetAt(DocYForScreen(pos.Y));
 
             List<MediaAsset> assets;
