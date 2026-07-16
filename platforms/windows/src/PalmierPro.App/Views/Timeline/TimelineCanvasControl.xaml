@@ -20,7 +20,23 @@
         architecture that Win2D's single-surface model makes unnecessary. See the class doc comment
         on TimelineCanvasControl for the coordinate-space contract this depends on.
     -->
-    <Grid x:Name="RootGrid" Background="{StaticResource AppBackgroundRaisedBrush}">
+    <!--
+        AllowDrop + the four Drag* handlers live on RootGrid, NOT on the Win2D CanvasControl.
+        CanvasControl is a sealed UserControl whose content is a CanvasImageSource (a compositor-
+        presented SurfaceImageSource); that surface takes pointer input fine but is skipped by the
+        XAML drag-drop hit-test, so an external drag over it finds no accepting target and the whole
+        region rejects the drop (no DragEnter ever fires). RootGrid is an ordinary brush-backed Grid
+        and is a reliable drop target across its full area; because Drag* are bubbling routed events,
+        a drag over the canvas cell resolves up to RootGrid. The handlers read position/geometry from
+        the `Canvas` field (e.GetPosition(Canvas)), never from `sender`, so hosting the wiring on the
+        parent is transparent to the drop math. See TimelineCanvasControl.DragDrop.cs.
+    -->
+    <Grid x:Name="RootGrid" Background="{StaticResource AppBackgroundRaisedBrush}"
+          AllowDrop="True"
+          DragEnter="Canvas_DragEnter"
+          DragOver="Canvas_DragOver"
+          DragLeave="Canvas_DragLeave"
+          Drop="Canvas_Drop">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
@@ -31,7 +47,6 @@
         </Grid.ColumnDefinitions>
 
         <canvas:CanvasControl x:Name="Canvas" Grid.Row="0" Grid.Column="0"
-                               AllowDrop="True"
                                CreateResources="Canvas_CreateResources"
                                Draw="Canvas_Draw"
                                SizeChanged="Canvas_SizeChanged"
@@ -42,10 +57,7 @@
                                PointerWheelChanged="Canvas_PointerWheelChanged"
                                DoubleTapped="Canvas_DoubleTapped"
                                RightTapped="Canvas_RightTapped"
-                               KeyDown="Canvas_KeyDown"
-                               DragOver="Canvas_DragOver"
-                               DragLeave="Canvas_DragLeave"
-                               Drop="Canvas_Drop"/>
+                               KeyDown="Canvas_KeyDown"/>
 
         <primitives:ScrollBar x:Name="VerticalScrollBar" Grid.Row="0" Grid.Column="1"
                                Orientation="Vertical" IndicatorMode="MouseIndicator"

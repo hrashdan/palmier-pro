@@ -1,8 +1,12 @@
+using System.Globalization;
+using System.Runtime.InteropServices;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using PalmierPro.App.Editing;
 using PalmierPro.App.ViewModels.Editor;
 using PalmierPro.Core.Interop;
 using PalmierPro.Core.Models;
+using Serilog;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 
@@ -20,6 +24,10 @@ public sealed partial class TimelineCanvasControl
     private List<MediaAsset>? _externalDragAssets;
     private SnapEngine.SnapState _externalSnapState;
 
+    /// Throttle stamp (Environment.TickCount64 ms) for the always-on "dragdiag|" telemetry emitted
+    /// on DragOver — diagnostic only, no bearing on drag behavior. See LogDragDiag.
+    private long _lastDragDiagTickMs;
+
     /// Pointer position for a drop event in the control's DIP "screen" space. `DragEventArgs`
     /// reports physical pixels (scaled by `XamlRoot.RasterizationScale`) — unlike the pointer/tap
     /// event args used everywhere else — so it must be divided back down to DIPs before feeding the
@@ -32,6 +40,24 @@ public sealed partial class TimelineCanvasControl
         return new Point(
             TimelineDragCoordinates.ScreenFromRaw(pos.X, scale),
             TimelineDragCoordinates.ScreenFromRaw(pos.Y, scale));
+    }
+
+    /// Diagnostic-only: logs one "dragdiag|enter|…" line with the static context (display scale,
+    /// window origin, canvas offset) needed to interpret the per-move samples. Does not touch drag
+    /// state or `AcceptedOperation` — acceptance is still resolved entirely in DragOver.
+    private void Canvas_DragEnter(object sender, DragEventArgs e)
+    {
+        _lastDragDiagTickMs = 0;
+        var scale = Canvas.XamlRoot?.RasterizationScale ?? 1.0;
+        var win = TryGetWindowPosition();
+        var off = TryGetCanvasOffset();
+        Log.Information("{DragDiag}",
+            $"dragdiag|enter" +
+            $"|scale={F(scale)}" +
+            $"|winPos={(win.ok ? $"{win.x},{win.y}" : "na")}" +
+            $"|canvasOff={(off.ok ? $"{F(off.x)},{F(off.y)}" : "na")}" +
+            $"|canvas={F(Canvas.ActualWidth)}x{F(Canvas.ActualHeight)}" +
+            $"|scrollX={F(_scrollX)}|scrollY={F(_scrollY)}|ppf={F(_pixelsPerFrame)}");
     }
 
     private void Canvas_DragLeave(object sender, DragEventArgs e)
@@ -79,6 +105,13 @@ public sealed partial class TimelineCanvasControl
 
             _drag = new ExternalDropDrag(target, frame, totalDur);
             RequestRedraw();
+
+            var nowMs = Environment.TickCount64;
+            if (nowMs - _lastDragDiagTickMs >= 100)
+            {
+                _lastDragDiagTickMs = nowMs;
+                LogDragDiag("over", e, geo, pos, frame, target);
+            }
         }
         finally
         {
@@ -130,6 +163,7 @@ public sealed partial class TimelineCanvasControl
 
             var totalDur = assets.Sum(a => vm.ClipDurationFrames(a, null));
             var frame = ComputeExternalDropFrame(vm, geo, pos.X, totalDur);
+            LogDragDiag("drop", e, geo, pos, frame, target);
             PlaceExternalDrop(vm, target, frame, assets);
         }
         finally
@@ -216,4 +250,116 @@ public sealed partial class TimelineCanvasControl
             vm.Document.UndoService.SetActionName("Add Clips");
         }
     }
+
+    // MARK: - Drag-drop diagnostics (telemetry only — no behavior change)
+
+    /// Emits one always-on "dragdiag|" line capturing ground-truth cursor (GetCursorPos, physical
+    /// screen px), window/canvas origin + rasterization scale, the raw + divided WinUI drag
+    /// position, and the pipeline internals the drop indicator is derived from — enough to
+    /// reconstruct, from a live repro, exactly where the gap between cursor and drop indicator
+    /// enters the math. Purely observational: reads already-computed values, never mutates drag
+    /// state. `phase` is "over" (throttled ~100ms) or "drop" (once).
+    private void LogDragDiag(string phase, DragEventArgs e, TimelineGeometry geo, Point screenPos, int frame, TrackDropTarget target)
+    {
+        var raw = e.GetPosition(Canvas);
+        var scale = Canvas.XamlRoot?.RasterizationScale ?? 1.0;
+        var cur = TryGetCursorScreen();
+        var win = TryGetWindowPosition();
+        var off = TryGetCanvasOffset();
+        var ghostX = ScreenXForFrame(geo, frame);
+        var trackIdx = geo.TrackAt(DocYForScreen(screenPos.Y));
+        var insertY = geo.InsertionLineY(target);
+        var targetDesc = target switch
+        {
+            TrackDropTarget.ExistingTrack(var i) => $"Existing:{i}",
+            TrackDropTarget.NewTrackAt(var i) => $"NewAt:{i}",
+            _ => "?",
+        };
+
+        Log.Information("{DragDiag}",
+            $"dragdiag|{phase}" +
+            $"|t={Environment.TickCount64}" +
+            $"|curPx={(cur.ok ? $"{cur.x},{cur.y}" : "na")}" +
+            $"|winPos={(win.ok ? $"{win.x},{win.y}" : "na")}" +
+            $"|scale={F(scale)}" +
+            $"|canvasOff={(off.ok ? $"{F(off.x)},{F(off.y)}" : "na")}" +
+            $"|rawGetPos={F(raw.X)},{F(raw.Y)}" +
+            $"|screenDiv={F(screenPos.X)},{F(screenPos.Y)}" +
+            $"|scrollX={F(_scrollX)}|scrollY={F(_scrollY)}|ppf={F(_pixelsPerFrame)}" +
+            $"|frame={frame}|ghostX={F(ghostX)}" +
+            $"|dropTarget={targetDesc}|trackIdx={trackIdx}" +
+            $"|insertY={(insertY is { } iy ? F(iy) : "na")}" +
+            $"|canvas={F(Canvas.ActualWidth)}x{F(Canvas.ActualHeight)}");
+    }
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// AppWindow origin in physical screen pixels via the XamlRoot's content island — independent of
+    /// which window holds foreground (an Explorer→timeline drag keeps the source app foreground).
+    private (bool ok, int x, int y) TryGetWindowPosition()
+    {
+        try
+        {
+            if (Canvas.XamlRoot?.ContentIslandEnvironment is { } env)
+            {
+                var appWindow = AppWindow.GetFromWindowId(env.AppWindowId);
+                if (appWindow is not null)
+                {
+                    return (true, appWindow.Position.X, appWindow.Position.Y);
+                }
+            }
+        }
+        catch
+        {
+            // Diagnostics must never disturb the drag — fall through to "na".
+        }
+        return (false, 0, 0);
+    }
+
+    /// Canvas top-left in the XamlRoot's DIP space (TransformToVisual from the root content).
+    private (bool ok, double x, double y) TryGetCanvasOffset()
+    {
+        try
+        {
+            if (Canvas.XamlRoot?.Content is UIElement root)
+            {
+                var p = Canvas.TransformToVisual(root).TransformPoint(new Point(0, 0));
+                return (true, p.X, p.Y);
+            }
+        }
+        catch
+        {
+            // Diagnostics must never disturb the drag — fall through to "na".
+        }
+        return (false, 0, 0);
+    }
+
+    private static (bool ok, int x, int y) TryGetCursorScreen()
+    {
+        try
+        {
+            if (GetCursorPos(out var p))
+            {
+                return (true, p.X, p.Y);
+            }
+        }
+        catch
+        {
+            // Diagnostics must never disturb the drag — fall through to "na".
+        }
+        return (false, 0, 0);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    // DllImport (not the source-generated LibraryImport) so this stays compatible with the App
+    // project's default AllowUnsafeBlocks=false — mirrors MainWindow's GetDpiForWindow P/Invoke.
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out NativePoint point);
 }
