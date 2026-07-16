@@ -3,6 +3,7 @@
 #include "include/palmier_engine.h"
 #include "Compositor.h"
 #include "D3D11Presenter.h"
+#include "ExportAudio.h"
 #include "GpuCompositor.h"
 #include "MediaCache.h"
 #include "PlaybackClock.h"
@@ -83,6 +84,33 @@ public:
     // No XAudio2 device involved: deterministic, the CI-facing hook for the mix loop. The same
     // AudioMixer instance is reused so a per-clip decode cursor persists across successive ranges.
     bool RenderAudioRange(int64_t startFrame, int32_t sampleCount, float* outInterleavedStereo, std::string& outError);
+
+    // Test/diagnostics hook behind PE_ExportAudioRenderForTest (export-v1.md §7) — drives a
+    // freshly-constructed ExportAudio (chunked AudioMixer::RenderRange -> resample -> fixed-size
+    // encoder AVFrame path, see ExportAudio.h) over [startFrame, startFrame+frameCount) TIMELINE
+    // FRAMES of the CURRENT snapshot in chunkFrameCount-frame pieces, then packs every produced
+    // AVFrame's samples tightly into outPcm — see PE_ExportAudioRenderForTest's own doc comment
+    // for the exact layout. *outSampleCount is always written with the total samples produced.
+    bool RenderAudioForExportTest(int64_t startFrame, int64_t frameCount, int32_t chunkFrameCount,
+        const ExportAudio::OutputFormat& outputFormat, uint8_t* outPcm, int32_t outPcmBytes,
+        int32_t& outSampleCount, std::string& outError);
+
+    // --- E5 export support (export-v1.md §5, §14.2) — the ExportSession orchestrator
+    // (native/ExportSession.h) drives these; they expose exactly the snapshot access + GPU compose
+    // its per-frame loop needs, keeping the loop itself out of this already-large class.
+
+    // The current open snapshot (nullptr if none) — ExportSession pins it once for the whole export
+    // (consistent output size / audio) and reads outputWidth/Height/Fps + audio content off it.
+    std::shared_ptr<const TimelineSnapshot> CurrentSnapshot();
+
+    // Composes `frame` of `snapshot` on the GPU compositor into the shared accumulator and returns
+    // its SRV. The CALLER MUST hold owner_->GraphicsMutex() across this call AND its readback-convert
+    // of outSrv — the accumulator ping-pongs, so outSrv is single-frame-lived (same borrow contract
+    // as GpuCompositor::ComposeForExport). Export is GPU-only (no CPU-compositor fallback, like color
+    // scopes); fails if no D3D11 device is available. `cancelFlag` (may be null) aborts a mid-compose.
+    bool ComposeExportFrameLocked(const TimelineSnapshot& snapshot, int64_t frame,
+        const std::atomic<int32_t>* cancelFlag, ID3D11ShaderResourceView*& outSrv,
+        int32_t& outWidth, int32_t& outHeight, std::string& outError);
 
     // Latest-wins windowed audio grab at `frame` (docs/audio-playback-v1.md §5) — plays once
     // through a lightweight voice separate from the persistent playback voice. A no-op (not an

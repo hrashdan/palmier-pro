@@ -317,6 +317,7 @@
     <x:Double x:Key="AppExportQueueProgressBarWidth">96</x:Double>
     <x:Double x:Key="AppExportQueueProgressWidth">32</x:Double>
     <x:Double x:Key="AppExportSheetWidthWithLog">1020.5</x:Double>
+    <x:Double x:Key="AppExportQueueRefreshInterval">0.1666666666666667</x:Double>
 
     <!-- Matte -->
     <x:Double x:Key="AppMatteSheetWidth">280</x:Double>

@@ -816,6 +816,38 @@ bool TimelineSession::ComputeColorScopes(int64_t frame, PE_ColorScopesResult& ou
     return true;
 }
 
+std::shared_ptr<const TimelineSnapshot> TimelineSession::CurrentSnapshot()
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    return snapshot_;
+}
+
+bool TimelineSession::ComposeExportFrameLocked(const TimelineSnapshot& snapshot, int64_t frame,
+    const std::atomic<int32_t>* cancelFlag, ID3D11ShaderResourceView*& outSrv,
+    int32_t& outWidth, int32_t& outHeight, std::string& outError)
+{
+    // Export is GPU-compute-only (the RGB->NV12/yuv422p10le convert has no CPU path, same as color
+    // scopes) — EnsureGraphicsDeviceShared tries hardware then WARP; a null device means both failed.
+    std::string deviceError;
+    ID3D11Device* device = owner_->EnsureGraphicsDeviceShared(deviceError);
+    if (!device)
+    {
+        outError = "no D3D11 device available for export compose: " + deviceError;
+        return false;
+    }
+    if (!gpuCompositor_)
+    {
+        gpuCompositor_ = std::make_unique<GpuCompositor>(device, owner_->GraphicsContext());
+    }
+
+    double fps = snapshot.Fps();
+    std::vector<uint8_t> scratch; // reused clip-to-clip within this single compose pass only
+    ClipFrameProvider provider = [&](const SnapshotClip& clip, double sourceSeconds, DecodedSourceFrame& outFrame) -> bool {
+        return ProvideClipFrame(clip, sourceSeconds, /*interactive*/ false, cancelFlag, fps, outFrame, scratch);
+    };
+    return gpuCompositor_->ComposeForExport(snapshot, frame, provider, cancelFlag, outSrv, outWidth, outHeight, outError);
+}
+
 bool TimelineSession::RenderAudioRange(int64_t startFrame, int32_t sampleCount, float* outInterleavedStereo, std::string& outError)
 {
     std::shared_ptr<const TimelineSnapshot> snapshot;
@@ -841,6 +873,76 @@ bool TimelineSession::RenderAudioRange(int64_t startFrame, int32_t sampleCount, 
         return false;
     }
     UpdateAudioLevels(outInterleavedStereo, sampleCount);
+    return true;
+}
+
+bool TimelineSession::RenderAudioForExportTest(int64_t startFrame, int64_t frameCount, int32_t chunkFrameCount,
+    const ExportAudio::OutputFormat& outputFormat, uint8_t* outPcm, int32_t outPcmBytes,
+    int32_t& outSampleCount, std::string& outError)
+{
+    outSampleCount = 0;
+    if (frameCount <= 0 || chunkFrameCount <= 0 || !outPcm || outPcmBytes <= 0)
+    {
+        outError = "invalid export-audio test request";
+        owner_->SetLastError(outError);
+        return false;
+    }
+
+    std::shared_ptr<const TimelineSnapshot> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        snapshot = snapshot_;
+    }
+    if (!snapshot)
+    {
+        outError = "timeline has no open snapshot";
+        owner_->SetLastError(outError);
+        return false;
+    }
+
+    ExportAudio exportAudio(outputFormat);
+    std::vector<AVFrame*> frames;
+    auto freeFrames = [&]() {
+        for (AVFrame*& f : frames)
+        {
+            av_frame_free(&f);
+        }
+        frames.clear();
+    };
+
+    if (!exportAudio.RenderTimelineRangeForTest(*snapshot, startFrame, frameCount, chunkFrameCount, frames, outError))
+    {
+        freeFrames();
+        owner_->SetLastError(outError);
+        return false;
+    }
+
+    // Pack every frame's samples, tightly, into outPcm — see PE_ExportAudioRenderForTest's doc.
+    const bool planar = av_sample_fmt_is_planar(outputFormat.sampleFormat) != 0;
+    const int32_t bytesPerSample = av_get_bytes_per_sample(outputFormat.sampleFormat);
+    int64_t offset = 0;
+    int64_t totalSamples = 0;
+    for (AVFrame* f : frames)
+    {
+        int32_t planeCount = planar ? outputFormat.channels : 1;
+        int32_t samplesPerPlane = planar ? f->nb_samples : f->nb_samples * outputFormat.channels;
+        int64_t bytesPerPlane = static_cast<int64_t>(samplesPerPlane) * bytesPerSample;
+        for (int32_t p = 0; p < planeCount; ++p)
+        {
+            if (offset + bytesPerPlane > outPcmBytes)
+            {
+                outError = "PE_ExportAudioRenderForTest: outPcm buffer too small";
+                owner_->SetLastError(outError);
+                freeFrames();
+                return false;
+            }
+            std::memcpy(outPcm + offset, f->data[p], static_cast<size_t>(bytesPerPlane));
+            offset += bytesPerPlane;
+        }
+        totalSamples += f->nb_samples;
+    }
+    freeFrames();
+    outSampleCount = static_cast<int32_t>(totalSamples);
     return true;
 }
 

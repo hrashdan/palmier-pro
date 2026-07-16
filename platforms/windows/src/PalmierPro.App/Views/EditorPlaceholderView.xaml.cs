@@ -5,8 +5,10 @@ using Microsoft.UI.Xaml.Input;
 using PalmierPro.App.Services;
 using PalmierPro.App.Theme;
 using PalmierPro.App.ViewModels.Editor;
+using PalmierPro.App.ViewModels.Export;
 using PalmierPro.App.ViewModels.MediaPanel;
 using PalmierPro.App.ViewModels.Preview;
+using PalmierPro.App.Views.Export;
 using PalmierPro.App.Views.Timeline;
 using PalmierPro.Core.Models;
 using PalmierPro.Core.Theme;
@@ -28,6 +30,7 @@ namespace PalmierPro.App.Views;
 public sealed partial class EditorPlaceholderView : UserControl
 {
     private readonly Window _window;
+    private ProjectDocument? _document;
     private EngineSession? _engineSession;
     private MediaVisualCache? _visualCache;
     private LottieBakeService? _lottieBakeService;
@@ -52,6 +55,7 @@ public sealed partial class EditorPlaceholderView : UserControl
     /// torn down.
     public void SetDocument(ProjectDocument? document, TimelineEditorViewModel? timeline)
     {
+        _document = document;
         TearDownMediaTab();
         TearDownPreview();
         TimelineTabBarHost.SetViewModel(null);
@@ -122,6 +126,28 @@ public sealed partial class EditorPlaceholderView : UserControl
     }
 
     public Task RequestImportMediaAsync() => MediaPanelHost.RequestImportAsync();
+
+    /// Ports the Mac's `.sheet(isPresented: $editor.showExportDialog) { ExportView() }` — a modal
+    /// ContentDialog hosting ExportView, torn down (view + ViewModel both go out of scope) when it
+    /// closes, matching the Mac's per-presentation `@State` bag in ExportView itself.
+    public async Task RequestExportAsync()
+    {
+        if (_document is null)
+        {
+            return;
+        }
+        var viewModel = new ExportViewModel(_document, ExportServices.Queue, new ExportDialogService(_window));
+        var view = new ExportView();
+        view.Initialize(viewModel);
+
+        var dialog = new ContentDialog
+        {
+            Content = view,
+            XamlRoot = XamlRoot,
+        };
+        viewModel.CloseRequested += (_, _) => dialog.Hide();
+        await dialog.ShowAsync();
+    }
 
     /// Double-click on a media-panel asset tile → the source-asset preview toggle. Fire-and-forget
     /// (same reasoning as PreviewViewModel's own ctor-time RebuildAsync): a failed open is caught

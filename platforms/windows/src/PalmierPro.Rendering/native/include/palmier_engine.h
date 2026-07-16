@@ -547,3 +547,210 @@ struct PE_ColorScopesResult
 // closed timeline; otherwise the same PE_Status values PE_TimelineRenderFrameToFile's compose
 // step can already produce. *outResult is only written on PE_OK.
 PALMIER_API int32_t PE_TimelineComputeColorScopes(PE_TimelineHandle timeline, int64_t frame, PE_ColorScopesResult* outResult);
+
+// --- Export (Stage F / E5) -------------------------------------------------------------
+//
+// Normative spec: docs/export-v1.md. CONTRACT-ONLY addition — mirrors docs/audio-playback-v1.md
+// and docs/color-scopes-v1.md's own "declarations here, no .cpp" convention: PE_ExportStart/
+// PE_ExportCancel are declared so the C# IExportService surface (PalmierPro.Services.Export)
+// has a stable ABI shape to compile and (eventually) link against; nothing in this section has
+// a native implementation yet (no native/ExportSession.h/.cpp ships with this header change —
+// doc §14 for exactly which future agent owns that).
+//
+// `timeline` must be a PE_TimelineHandle opened SOLELY for this export (PE_OpenTimeline against
+// a snapshot whose outputWidth/outputHeight already equal utf8OptionsJson's width/height — doc
+// §4.2) — never a handle also driving live preview (swap-chain-attached, or receiving
+// PE_TimelineSeek/PE_TimelinePlay calls). PE_ExportStart bypasses the render thread's seek
+// mailbox entirely, exactly like PE_TimelineRenderFrameToFile/PE_TimelineRenderAudioRange (doc
+// §5) — running it against a handle that's also fielding concurrent seeks/plays is undefined.
+// At most one PE_ExportStart call may be in flight per session at a time —
+// PE_ERROR_INVALID_ARGUMENT on a second concurrent call on the same session (doc §3.1); mirrors
+// ExportQueue's own single-active-job invariant as a defensive native-side check, not a real
+// usage pattern (the queue never calls in twice).
+//
+// Runs SYNCHRONOUSLY on the calling thread — same convention as PE_BakeLottieVideo. Callers
+// invoke from a background Task; the ExportQueue's single-worker pump (doc §11) is exactly that
+// background Task. PE_ExportCancel is called from a DIFFERENT thread (the UI thread's Cancel
+// button) and sets a session-scoped std::atomic<bool> that the export loop polls at decode/
+// dispatch/encode boundaries — at least once per output frame (doc §8).
+//
+// Owns its own temp-file + atomic-rename discipline internally, exactly like PE_BakeLottieVideo
+// (doc §9): utf8OptionsJson's outputPath is only ever created, complete and playable, on PE_OK.
+// Any failure or cancellation (PE_ERROR_CANCELLED) leaves NO file at outputPath at all — the
+// internal temp file is cleaned up before returning.
+
+enum PE_ExportPhase : int32_t
+{
+    PE_EXPORT_PHASE_PREPARING = 0,
+    PE_EXPORT_PHASE_EXPORTING = 1,
+};
+
+// Fired at most once, when the export transitions from setup (encoder probe, container/file
+// open) to the per-frame compose/encode loop — mirrors the Mac ExportService.Phase split
+// exactly (it has no third case). Every finer-grained state the C# ExportJobStatus enum exposes
+// (queued/preparing/rendering/canceling/completed/failed/canceled) is pure C#-side bookkeeping
+// layered on top of this one call, the same way the Mac's ExportQueue.update(_:for:) already
+// derives its own richer status purely from ExportService.Phase. May be null (doc §4.3).
+typedef void (*PE_ExportPhaseCallback)(void* userCtx, int32_t phase);
+
+// Fired repeatedly during PE_EXPORT_PHASE_EXPORTING with fractionCompleted in [0, 1] —
+// frame-count-based (framesEncoded / totalFrames), not time-based. May be invoked from the
+// calling thread only (PE_ExportStart is fully synchronous) — same marshal-to-UI-thread
+// contract as every other engine callback in this header. May be null (doc §4.3).
+typedef void (*PE_ExportProgressCallback)(void* userCtx, double fractionCompleted);
+
+struct PE_ExportCallbacks
+{
+    PE_ExportPhaseCallback onPhase;       // may be null
+    PE_ExportProgressCallback onProgress; // may be null
+    void* userCtx;
+};
+
+#pragma pack(push, 8)
+
+// encoderName: NUL-terminated UTF-8, e.g. "h264_nvenc", "hevc_qsv", "libx264", "prores_ks" —
+// diagnostics/telemetry only (doc §6); the C# side never branches on it. Only written on PE_OK.
+struct PE_ExportResult
+{
+    int64_t framesEncoded;
+    int32_t usedHardwareEncoder; // 0/1
+    char encoderName[32];
+};
+
+#pragma pack(pop)
+
+// utf8OptionsJson: doc §4.2's schema (codec/container/width/height/fps/outputPath —
+// "matchTimeline" is ALREADY resolved to concrete pixels by the C# caller; native never parses
+// that string, or any other symbolic resolution name). PE_ERROR_INVALID_ARGUMENT if width/height
+// don't equal the open timeline's current snapshot outputWidth/outputHeight (doc §4.2), or if
+// codec/container isn't one of the two valid v1 pairings (h264|h265 -> mp4, prores -> mov).
+// *outResult is only written on PE_OK.
+PALMIER_API int32_t PE_ExportStart(
+    PE_SessionHandle session,
+    PE_TimelineHandle timeline,
+    const char* utf8OptionsJson,
+    PE_ExportCallbacks callbacks,
+    PE_ExportResult* outResult);
+
+// Sets the cancellation atomic for whichever PE_ExportStart call is currently running on
+// `session` (doc §8) — a no-op (PE_OK, not an error) if none is. Safe to call from any thread,
+// including while PE_ExportStart is blocked on its own (different) calling thread — that's the
+// whole point; doc §3.1's "at most one export per session" invariant is what makes "which
+// export" unambiguous without an explicit export handle.
+PALMIER_API int32_t PE_ExportCancel(PE_SessionHandle session);
+
+// --- Export GPU readback test hook (Stage F / E5) ---------------------------------------------
+//
+// Test/diagnostics ONLY — drives the native ExportReadback (export-v1.md §5's gamma-RGB ->
+// NV12 / ->yuv422p10le compute pass + Map-frame-N-2 staging ring) directly, with none of the rest
+// of the export pipeline (no encoder, no muxer, no timeline handle). This is what lets the analytic
+// color / chroma-siting / ring-ordering tests (PalmierPro.Rendering.Tests) verify the COLOR-CRITICAL
+// conversion against hand-computed BT.709 limited-range values on WARP — the same role
+// PE_TimelineComputeColorScopes plays for the E6 scope tests. NOT part of the shipping export ABI:
+// PE_ExportStart owns the ExportReadback in production (doc §5, §14.2).
+enum PE_ExportPixelFormat : int32_t
+{
+    PE_EXPORT_PIXEL_FORMAT_NV12 = 0,        // 8-bit 4:2:0 (H.264/H.265)
+    PE_EXPORT_PIXEL_FORMAT_YUV422P10LE = 1, // 10-bit 4:2:2 (ProRes)
+};
+
+// Runs `frameCount` synthetic accumulator frames through one ExportReadback ring and writes every
+// frame's converted planes, in submission order, tightly packed into outPlanes. Each input frame is
+// width*height GAMMA-encoded PREMULTIPLIED RGBA16F pixels (4 halfs/pixel, row-major, no padding).
+// Per-frame packed output layout (plane 0..N-1, tightly packed, no padding between planes/frames):
+//   NV12:        Y[width*height] u8,   then UV[(width/2)*(height/2)*2] u8  (Cb,Cr interleaved)
+//   YUV422P10LE: Y[width*height] u16le, U[(width/2)*height] u16le, V[(width/2)*height] u16le
+//                (each sample's 10-bit code in the low bits of the 16-bit word)
+// width/height must be positive and EVEN. outPlanesBytes must equal frameCount times the per-frame
+// packed size for `format` (PE_ERROR_INVALID_ARGUMENT / PE_ERROR_BUFFER_TOO_SMALL otherwise).
+PALMIER_API int32_t PE_ExportReadbackConvertForTest(
+    PE_SessionHandle session,
+    int32_t format,
+    int32_t width,
+    int32_t height,
+    const uint16_t* framesRgba16,
+    int32_t frameCount,
+    uint8_t* outPlanes,
+    int32_t outPlanesBytes);
+
+// --- Export audio test hook (Stage F / E5) ------------------------------------------------------
+//
+// Test/diagnostics ONLY — drives the native ExportAudio (export-v1.md §7's DECISION to reuse the
+// offline AudioMixer path: chunked AudioMixer::RenderRange -> libswresample -> fixed-size encoder
+// AVFrame handoff) against an ALREADY-OPEN timeline's current snapshot, with none of the rest of
+// the export pipeline (no encoder, no muxer). This is what lets the export/preview-parity test
+// (PalmierPro.Rendering.Tests) compare ExportAudio's chunked+resampled bytes against
+// PE_TimelineRenderAudioRange's own direct Float32 output for the identical range, and exercise
+// fades/mute/retime through the chunked path the same way. NOT part of the shipping export ABI.
+// The ExportAudio class is a self-contained implementation of §7's AudioMixer -> libswresample ->
+// fixed-frame pipeline; the shipping PE_ExportStart path (native ExportSession) reuses the same §7
+// policy directly — AudioMixer::RenderRange per output frame handed to ExportEncoder's own
+// swr+AVAudioFifo (ExportEncoder::PushAudio) — and does NOT instantiate ExportAudio.
+enum PE_ExportAudioSampleFormat : int32_t
+{
+    PE_EXPORT_AUDIO_FMT_FLT = 0,  // packed (interleaved) float32 — AV_SAMPLE_FMT_FLT
+    PE_EXPORT_AUDIO_FMT_FLTP = 1, // planar float32 — AV_SAMPLE_FMT_FLTP (libavcodec's "aac" encoder's native format)
+    PE_EXPORT_AUDIO_FMT_S16 = 2,  // packed int16 — AV_SAMPLE_FMT_S16
+};
+
+// Renders [startFrame, startFrame+frameCount) TIMELINE FRAMES of `timeline`'s current snapshot's
+// audio through ExportAudio, chunked internally into chunkFrameCount-frame RenderRange calls
+// (mirrors the production export loop's natural video-frame-cadence pull — export-v1.md §7's
+// "however many samples correspond to one AAC frame" cadence, translated through RenderRange's own
+// frame-granular startFrame contract), resampled to outputSampleFormat/outputSampleRate/
+// outputChannels with outputFrameSize-sample encoder frames, then Flushed. Writes every produced
+// frame's samples, in submission order, tightly packed into outPcm — planar formats: one frame's
+// channel-0 samples in full, then channel-1's, THEN the next frame's channel-0, etc. (NOT
+// interleaved across channels or frames); packed formats: each frame's already-interleaved samples
+// back to back. outPcmBytes must be >= the total bytes actually produced (PE_ERROR_UNKNOWN
+// otherwise — this is a test-only hook, so callers are expected to size outPcm exactly via
+// ExportAudio::PackedPcmBytesForTest rather than probe with an undersized buffer).
+// *outSampleCount is only written on PE_OK, with the exact number of samples produced (== the requested
+// 48 kHz-domain sample count when outputSampleRate == 48000 — the only ratio v1's AAC path
+// actually uses, doc §7: "libswresample is audio-only ... no rate change").
+PALMIER_API int32_t PE_ExportAudioRenderForTest(
+    PE_TimelineHandle timeline,
+    int64_t startFrame,
+    int64_t frameCount,
+    int32_t chunkFrameCount,
+    int32_t outputSampleFormat,
+    int32_t outputSampleRate,
+    int32_t outputChannels,
+    int32_t outputFrameSize,
+    uint8_t* outPcm,
+    int32_t outPcmBytes,
+    int32_t* outSampleCount);
+
+// --- Export encoder/muxer test hook (Stage F / E5) ---------------------------------------------
+//
+// Test/diagnostics ONLY — drives the native ExportEncoder (export-v1.md §6/§7/§9: codec probe +
+// hardware-opportunistic selection, mp4/mov muxing with faststart, AAC audio interleaving) end to
+// end, with none of the rest of the export pipeline (no timeline, no GPU readback). It synthesizes
+// `frameCount` moving-gradient frames DIRECTLY in the codec's plane layout (the same NV12 /
+// yuv422p10le ExportReadback produces) plus `frameCount / fps` seconds of a `sineHz` stereo sine at
+// 48 kHz (Float32 interleaved PCM standing in for AudioMixer::RenderRange's output), encodes+muxes
+// them into utf8OutputPath, and reports the encoder actually used. This is what lets the round-trip
+// tests (PalmierPro.Rendering.Tests) ffprobe-validate codec / pix_fmt / duration / audio stream and
+// assert PTS monotonicity per codec. NOT part of the shipping export ABI: PE_ExportStart owns the
+// ExportEncoder in production (doc §6, §14.2). forceSoftware!=0 (or PALMIERENGINE_FORCE_SW_ENCODE=1)
+// skips the h264/h265 hardware probe so the resulting codec_name is deterministic across CI runners.
+enum PE_ExportCodec : int32_t
+{
+    PE_EXPORT_CODEC_H264 = 0,   // libx264 / h264_nvenc / h264_qsv -> mp4
+    PE_EXPORT_CODEC_H265 = 1,   // libx265 / hevc_nvenc / hevc_qsv -> mp4
+    PE_EXPORT_CODEC_PRORES = 2, // prores_ks (422, 10-bit) -> mov
+};
+
+PALMIER_API int32_t PE_ExportEncodeForTest(
+    PE_SessionHandle session,
+    int32_t codec,             // PE_ExportCodec
+    const char* utf8Container, // "mp4" | "mov"
+    int32_t width,
+    int32_t height,
+    int32_t fps,
+    int32_t frameCount,
+    int32_t withAudio,         // 0/1
+    double sineHz,
+    int32_t forceSoftware,     // 0/1
+    const char* utf8OutputPath,
+    PE_ExportResult* outResult);

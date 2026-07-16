@@ -345,6 +345,7 @@ public class ThemeParityTests
             ("AppExportQueueProgressBarWidth", AppThemeTokens.Export.QueueProgressBarWidth),
             ("AppExportQueueProgressWidth", AppThemeTokens.Export.QueueProgressWidth),
             ("AppExportSheetWidthWithLog", AppThemeTokens.Export.SheetWidthWithLog),
+            ("AppExportQueueRefreshInterval", AppThemeTokens.Export.QueueRefreshInterval),
 
             ("AppMatteSheetWidth", AppThemeTokens.Matte.SheetWidth),
             ("AppMatteControlWidth", AppThemeTokens.Matte.ControlWidth),

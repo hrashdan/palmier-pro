@@ -114,6 +114,10 @@
     <ClCompile Include="CurveMath.cpp" />
     <ClCompile Include="GpuCompositor.cpp" />
     <ClCompile Include="Scopes.cpp" />
+    <ClCompile Include="ExportReadback.cpp" />
+    <ClCompile Include="ExportAudio.cpp" />
+    <ClCompile Include="ExportEncoder.cpp" />
+    <ClCompile Include="ExportSession.cpp" />
     <ClCompile Include="FontRegistry.cpp" />
     <ClCompile Include="TextRenderer.cpp" />
     <ClCompile Include="TextAnimator.cpp" />
@@ -157,6 +161,10 @@
     <ClInclude Include="EffectRegistry.h" />
     <ClInclude Include="GpuCompositor.h" />
     <ClInclude Include="Scopes.h" />
+    <ClInclude Include="ExportReadback.h" />
+    <ClInclude Include="ExportAudio.h" />
+    <ClInclude Include="ExportEncoder.h" />
+    <ClInclude Include="ExportSession.h" />
     <ClInclude Include="FontRegistry.h" />
     <ClInclude Include="TextRenderer.h" />
     <ClInclude Include="TextAnimator.h" />
@@ -204,6 +212,9 @@
     <None Include="shaders\Composite.hlsl" />
     <None Include="shaders\ScopesDownsample.hlsl" />
     <None Include="shaders\ScopesHistogram.hlsl" />
+    <None Include="shaders\ExportColor.hlsl" />
+    <None Include="shaders\ExportNV12.hlsl" />
+    <None Include="shaders\ExportYuv422p10.hlsl" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

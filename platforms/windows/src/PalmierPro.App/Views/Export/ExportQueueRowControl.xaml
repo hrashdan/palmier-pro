@@ -1,0 +1,58 @@
+<UserControl
+    x:Class="PalmierPro.App.Views.Export.ExportQueueRowControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- One ExportQueueRowViewModel row — ports exportLogRow (Export/ExportView.swift): timestamp,
+         status icon, filename, progress bar + percent (Exporting only), trailing action button,
+         bottom hairline divider. BorderThickness/Padding are set in code-behind — see AGENTS.md's
+         {StaticResource}-into-Thickness caveat. -->
+    <Border x:Name="RootBorder" BorderBrush="{StaticResource AppBorderSubtleBrush}">
+        <Grid x:Name="RootGrid" ColumnSpacing="{StaticResource AppSpacingSm}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="{StaticResource AppExportQueueTimestampWidth}"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="{StaticResource AppExportQueueProgressBarWidth}"/>
+                <ColumnDefinition Width="{StaticResource AppExportQueueProgressWidth}"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock x:Name="TimestampText" Grid.Column="0"
+                       FontSize="{StaticResource AppFontSizeXxs}"
+                       Foreground="{StaticResource AppTextMutedBrush}"
+                       FontFamily="Consolas"
+                       VerticalAlignment="Center"/>
+
+            <Grid x:Name="StatusIconHost" Grid.Column="1"
+                  Width="{StaticResource AppIconSizeXs}" Height="{StaticResource AppIconSizeXs}"
+                  VerticalAlignment="Center">
+                <FontIcon x:Name="StatusGlyph" FontFamily="Segoe Fluent Icons" FontSize="{StaticResource AppFontSizeXs}"/>
+                <ProgressRing x:Name="StatusSpinner" Width="{StaticResource AppIconSizeXs}" Height="{StaticResource AppIconSizeXs}"/>
+            </Grid>
+
+            <TextBlock x:Name="FilenameText" Grid.Column="2"
+                       FontSize="{StaticResource AppFontSizeXs}" FontWeight="Medium"
+                       Foreground="{StaticResource AppTextPrimaryBrush}"
+                       TextTrimming="CharacterEllipsis"
+                       VerticalAlignment="Center"/>
+
+            <ProgressBar x:Name="ProgressBarControl" Grid.Column="3" Minimum="0" Maximum="100" VerticalAlignment="Center"/>
+
+            <TextBlock x:Name="ProgressText" Grid.Column="4"
+                       FontSize="{StaticResource AppFontSizeXs}"
+                       Foreground="{StaticResource AppTextSecondaryBrush}"
+                       FontFamily="Consolas"
+                       HorizontalAlignment="Right" VerticalAlignment="Center"/>
+
+            <Button x:Name="ActionButton" Grid.Column="5"
+                    Background="Transparent" BorderThickness="0"
+                    VerticalAlignment="Center" Click="ActionButton_Click">
+                <FontIcon x:Name="ActionGlyph" FontFamily="Segoe Fluent Icons" FontSize="{StaticResource AppFontSizeSm}"/>
+            </Button>
+        </Grid>
+    </Border>
+</UserControl>

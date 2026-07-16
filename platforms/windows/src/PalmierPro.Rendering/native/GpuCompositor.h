@@ -66,6 +66,22 @@ public:
         PE_ColorScopesResult& outResult,
         std::string& outError);
 
+    // E5 export (export-v1.md §5) — a Compose sibling that shares every stage through the
+    // composited accumulator (ComposeToAccumulator) and hands its SRV out for the caller's own
+    // ExportReadback convert pass (RGB->NV12/yuv422p10le), the same relationship ComputeColorScopes
+    // has with Scopes. outSrv is borrowed (owned by this instance) and valid only until the next
+    // compose on it — the accumulator ping-pongs, so the caller must convert it before composing
+    // the next frame (ExportSession does exactly this, under the session's GraphicsMutex).
+    bool ComposeForExport(
+        const TimelineSnapshot& snapshot,
+        int64_t frame,
+        const ClipFrameProvider& provider,
+        const std::atomic<int32_t>* cancelFlag,
+        ID3D11ShaderResourceView*& outSrv,
+        int32_t& outWidth,
+        int32_t& outHeight,
+        std::string& outError);
+
 private:
     struct GpuTex
     {

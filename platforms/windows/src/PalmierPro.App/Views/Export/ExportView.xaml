@@ -1,0 +1,201 @@
+<UserControl
+    x:Class="PalmierPro.App.Views.Export.ExportView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- Ports Export/ExportView.swift's two-pane sheet: settings (destination/codec/resolution/
+         FCPXML pickers + submit bar) on the left, a live export-queue log on the right. Sizing
+         from AppTheme.Export tokens (AGENTS.md). RadioButtons/ComboBox/ProgressRing are the
+         idiomatic WinUI stand-ins for the Mac's custom radio dots/Picker/spinner — same "accepted,
+         documented divergence" precedent as AssetTileControl's text-trim note. CornerRadius/
+         BorderThickness/Padding/Margin are set in code-behind — see AGENTS.md's
+         {StaticResource}-into-Thickness caveat. -->
+    <StackPanel x:Name="RootPanel" Orientation="Horizontal">
+
+        <Grid x:Name="SettingsColumn" Width="{StaticResource AppExportSheetWidth}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock x:Name="HeaderText" Grid.Row="0" Text="Export"
+                       FontSize="{StaticResource AppFontSizeTitle2}" FontWeight="Normal"
+                       Foreground="{StaticResource AppTextPrimaryBrush}"/>
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel x:Name="SettingsStack">
+
+                    <TextBlock x:Name="DestinationLabel" Text="Destination"
+                               FontSize="{StaticResource AppFontSizeMd}" Foreground="{StaticResource AppTextSecondaryBrush}"/>
+                    <RadioButtons x:Name="DestinationRadioButtons" MaxColumns="3"
+                                  SelectionChanged="DestinationRadioButtons_SelectionChanged"/>
+
+                    <Rectangle x:Name="DestinationDivider" Height="{StaticResource AppBorderWidthHairline}" Fill="{StaticResource AppBorderSubtleBrush}"/>
+
+                    <Grid x:Name="TimelinePickerRow">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Timeline" Grid.Column="0"
+                                   FontSize="{StaticResource AppFontSizeMd}" Foreground="{StaticResource AppTextSecondaryBrush}" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="TimelineComboBox" Grid.Column="1" SelectionChanged="TimelineComboBox_SelectionChanged"/>
+                    </Grid>
+
+                    <Rectangle x:Name="TimelinePickerDivider" Height="{StaticResource AppBorderWidthHairline}" Fill="{StaticResource AppBorderSubtleBrush}"/>
+
+                    <!-- Video destination -->
+                    <StackPanel x:Name="VideoSettingsPanel">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Codec" Grid.Column="0" FontSize="{StaticResource AppFontSizeMd}" Foreground="{StaticResource AppTextSecondaryBrush}" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="CodecComboBox" Grid.Column="1" SelectionChanged="CodecComboBox_SelectionChanged"/>
+                        </Grid>
+                        <Rectangle Height="{StaticResource AppBorderWidthHairline}" Fill="{StaticResource AppBorderSubtleBrush}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="File Type" Grid.Column="0" FontSize="{StaticResource AppFontSizeMd}" Foreground="{StaticResource AppTextSecondaryBrush}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="FileTypeText" Grid.Column="1" Foreground="{StaticResource AppTextTertiaryBrush}" VerticalAlignment="Center"/>
+                        </Grid>
+                        <Rectangle Height="{StaticResource AppBorderWidthHairline}" Fill="{StaticResource AppBorderSubtleBrush}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Resolution" Grid.Column="0" FontSize="{StaticResource AppFontSizeMd}" Foreground="{StaticResource AppTextSecondaryBrush}" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ResolutionComboBox" Grid.Column="1" SelectionChanged="ResolutionComboBox_SelectionChanged"/>
+                        </Grid>
+                        <Rectangle Height="{StaticResource AppBorderWidthHairline}" Fill="{StaticResource AppBorderSubtleBrush}"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Frame Rate" Grid.Column="0" FontSize="{StaticResource AppFontSizeMd}" Foreground="{StaticResource AppTextSecondaryBrush}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="FrameRateText" Grid.Column="1" Foreground="{StaticResource AppTextTertiaryBrush}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Timeline destination -->
+                    <StackPanel x:Name="TimelineSettingsPanel">
+                        <TextBlock Text="Timeline Format" FontSize="{StaticResource AppFontSizeMd}" FontWeight="Medium" Foreground="{StaticResource AppTextSecondaryBrush}"/>
+
+                        <Border x:Name="XmemlCard" Tapped="XmemlCard_Tapped">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+                                    <FontIcon x:Name="XmemlSelectedGlyph" FontFamily="Segoe Fluent Icons" FontSize="{StaticResource AppFontSizeMd}"/>
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="XMEML" FontSize="{StaticResource AppFontSizeMd}" FontWeight="SemiBold" Foreground="{StaticResource AppTextPrimaryBrush}"/>
+                                            <TextBlock Text=".xml" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}"/>
+                                            <TextBlock Text="v4" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}"/>
+                                        </StackPanel>
+                                        <TextBlock Text="Older interchange format, best when Premiere Pro is the destination. Supports basic edits and keyframes, but not text, color, or effects."
+                                                   FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}" TextWrapping="Wrap"/>
+                                        <TextBlock Text="Compatibility: Premiere Pro and DaVinci Resolve"
+                                                   FontSize="{StaticResource AppFontSizeXs}" FontWeight="Medium" Foreground="{StaticResource AppTextSecondaryBrush}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border x:Name="FcpxmlCard" Tapped="FcpxmlCard_Tapped">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+                                    <FontIcon x:Name="FcpxmlSelectedGlyph" FontFamily="Segoe Fluent Icons" FontSize="{StaticResource AppFontSizeMd}"/>
+                                    <StackPanel>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="FCPXML" FontSize="{StaticResource AppFontSizeMd}" FontWeight="SemiBold" Foreground="{StaticResource AppTextPrimaryBrush}"/>
+                                            <TextBlock Text=".fcpxml" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}"/>
+                                        </StackPanel>
+                                        <TextBlock Text="Newer timeline format with better support for DaVinci Resolve and Final Cut Pro. Supports basic edits, keyframes, and text, but not color or effects."
+                                                   FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}" TextWrapping="Wrap"/>
+                                        <TextBlock Text="Compatibility: DaVinci Resolve and Final Cut Pro"
+                                                   FontSize="{StaticResource AppFontSizeXs}" FontWeight="Medium" Foreground="{StaticResource AppTextSecondaryBrush}" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <StackPanel x:Name="FcpxmlSubRow" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="For" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}" VerticalAlignment="Center"/>
+                                    <ComboBox x:Name="FcpxmlTargetComboBox" SelectionChanged="FcpxmlTargetComboBox_SelectionChanged"/>
+                                    <TextBlock Text="Version" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}" VerticalAlignment="Center"/>
+                                    <ComboBox x:Name="FcpxmlVersionComboBox" SelectionChanged="FcpxmlVersionComboBox_SelectionChanged"/>
+                                    <TextBlock x:Name="FcpxmlCompatibilityNoteText" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppTextTertiaryBrush}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Palmier Project destination -->
+                    <StackPanel x:Name="PalmierSettingsPanel">
+                        <TextBlock Text="Saves a copy of this project with all media bundled inside, so it opens on any machine."
+                                   FontSize="{StaticResource AppFontSizeSm}" Foreground="{StaticResource AppTextSecondaryBrush}" TextWrapping="Wrap"/>
+                        <TextBlock x:Name="PalmierMissingWarningText" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppStatusErrorBrush}" TextWrapping="Wrap"/>
+                    </StackPanel>
+
+                    <TextBlock x:Name="SubmissionErrorText" FontSize="{StaticResource AppFontSizeXs}" Foreground="{StaticResource AppStatusErrorBrush}" TextWrapping="Wrap"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Grid x:Name="BottomBar" Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel x:Name="SummaryPanel" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"/>
+                <Button x:Name="CloseButton" Grid.Column="1" Content="Close" Click="CloseButton_Click"/>
+                <Button x:Name="ExportActionButton" Grid.Column="2" Style="{StaticResource AccentButtonStyle}" Click="ExportActionButton_Click"/>
+            </Grid>
+        </Grid>
+
+        <Rectangle x:Name="ColumnDivider" Width="{StaticResource AppBorderWidthThin}" Fill="{StaticResource AppBorderPrimaryBrush}"/>
+
+        <Grid x:Name="LogColumn" Width="{StaticResource AppExportLogPaneWidth}" Background="{StaticResource AppBackgroundRaisedBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid x:Name="LogHeader" Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="LogHeaderText" Grid.Column="0" Text="Export Queue"
+                           FontSize="{StaticResource AppFontSizeMd}" FontWeight="SemiBold" Foreground="{StaticResource AppTextPrimaryBrush}" VerticalAlignment="Center"/>
+                <TextBlock x:Name="PendingCountText" Grid.Column="1" FontSize="{StaticResource AppFontSizeXs}" FontWeight="SemiBold"
+                           Foreground="{StaticResource AppTextSecondaryBrush}" VerticalAlignment="Center"/>
+                <Button x:Name="ClearFinishedButton" Grid.Column="3" Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="Clear Finished" Click="ClearFinishedButton_Click">
+                    <FontIcon FontFamily="Segoe Fluent Icons" FontSize="{StaticResource AppFontSizeSm}" Glyph="&#xE74D;"/>
+                </Button>
+            </Grid>
+
+            <Rectangle Grid.Row="1" Height="{StaticResource AppBorderWidthHairline}" Fill="{StaticResource AppBorderSubtleBrush}"/>
+
+            <Grid Grid.Row="2">
+                <TextBlock x:Name="EmptyLogText" Text="No exports yet"
+                           FontSize="{StaticResource AppFontSizeSm}" Foreground="{StaticResource AppTextMutedBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <ScrollViewer x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="LogStack"/>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+    </StackPanel>
+</UserControl>

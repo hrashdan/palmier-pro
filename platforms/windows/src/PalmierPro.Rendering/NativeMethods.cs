@@ -53,6 +53,29 @@ internal unsafe struct PE_ColorScopesResult
     public fixed float HueHistogram[96];
 }
 
+// Mirrors native PE_ExportResult (palmier_engine.h, #pragma pack(push, 8)) — diagnostics the
+// export encoder writes on success: frames encoded, whether a hardware encoder was used, and the
+// encoder name ("libx264"/"h264_nvenc"/"prores_ks"/...). See EngineSession.ExportEncodeForTest.
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+internal unsafe struct PE_ExportResult
+{
+    public long FramesEncoded;
+    public int UsedHardwareEncoder;
+    public fixed byte EncoderName[32];
+}
+
+// Mirrors native PE_ExportCallbacks (palmier_engine.h) — the two per-export callbacks + userCtx,
+// passed BY VALUE to PE_ExportStart. onPhase fires at most once (Preparing -> Exporting); onProgress
+// fires repeatedly during Exporting with fractionCompleted in [0, 1]. Either function pointer may be
+// null. All three fields are pointer-sized, so this is blittable and passes by value directly.
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct PE_ExportCallbacks
+{
+    public delegate* unmanaged[Cdecl]<nint, int, void> OnPhase;
+    public delegate* unmanaged[Cdecl]<nint, double, void> OnProgress;
+    public nint UserCtx;
+}
+
 // Mirrors native/include/palmier_engine.h's PE_Status. 0 = ok, negative = error.
 internal enum PE_Status
 {
@@ -196,6 +219,48 @@ internal static partial class NativeMethods
     // floats, caller-owned) with the 48 kHz stereo mix for the range at timeline `startFrame`.
     [LibraryImport(EngineLibrary)]
     internal static unsafe partial int PE_TimelineRenderAudioRange(nint timeline, long startFrame, int frameCount, float* outInterleavedStereo);
+
+    // E5 export GPU readback test hook (export-v1.md §5) — drives ExportReadback over `frameCount`
+    // synthetic RGBA16F accumulator frames, packing every frame's converted NV12/yuv422p10le planes
+    // (submission order, tightly packed) into outPlanes. Test/diagnostics only; see
+    // EngineSession.ExportReadbackConvertForTest for the packed layout and PackedFrameBytes.
+    [LibraryImport(EngineLibrary)]
+    internal static unsafe partial int PE_ExportReadbackConvertForTest(
+        nint session, int format, int width, int height,
+        ushort* framesRgba16, int frameCount, byte* outPlanes, int outPlanesBytes);
+
+    // E5 export audio test hook (export-v1.md §7) — drives ExportAudio's chunked
+    // AudioMixer::RenderRange -> resample -> fixed-size encoder AVFrame path over `frameCount`
+    // TIMELINE frames of the current snapshot's audio, packing every produced frame's samples
+    // (submission order, tightly packed) into outPcm. Test/diagnostics only; see
+    // TimelineSession.RenderAudioForExportTest for the packed layout.
+    [LibraryImport(EngineLibrary)]
+    internal static unsafe partial int PE_ExportAudioRenderForTest(
+        nint timeline, long startFrame, long frameCount, int chunkFrameCount,
+        int outputSampleFormat, int outputSampleRate, int outputChannels, int outputFrameSize,
+        byte* outPcm, int outPcmBytes, out int outSampleCount);
+
+    // E5 export encoder/muxer test hook (export-v1.md §6/§7/§9) — drives ExportEncoder end to end:
+    // synthesizes `frameCount` moving-gradient frames in the codec's plane layout + a `sineHz` stereo
+    // sine, encodes+muxes them into utf8OutputPath, reports the encoder used. Test/diagnostics only;
+    // see EngineSession.ExportEncodeForTest.
+    [LibraryImport(EngineLibrary, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int PE_ExportEncodeForTest(
+        nint session, int codec, string utf8Container, int width, int height, int fps, int frameCount,
+        int withAudio, double sineHz, int forceSoftware, string utf8OutputPath, PE_ExportResult* outResult);
+
+    // E5 export shipping ABI (export-v1.md §4-§9) — the whole compose->convert->encode loop for the
+    // Video destination. Synchronous; callers invoke from a background Task (the ExportQueue worker,
+    // §11). utf8OptionsJson is §4.2's codec/container/width/height/fps/outputPath schema. Owns its own
+    // temp-file + atomic-rename discipline (§9): outputPath appears only on PE_OK, never on failure or
+    // PE_ERROR_CANCELLED. `callbacks` (by value) may carry null function pointers. *outResult written
+    // only on PE_OK. PE_ExportCancel (any thread) sets the session-scoped atomic this call polls (§8).
+    [LibraryImport(EngineLibrary, StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int PE_ExportStart(
+        nint session, nint timeline, string utf8OptionsJson, PE_ExportCallbacks callbacks, PE_ExportResult* outResult);
+
+    [LibraryImport(EngineLibrary)]
+    internal static partial int PE_ExportCancel(nint session);
 
     // Master meter tap (Stage E, AudioMeterView): raw linear-amplitude peak + RMS per channel from
     // the most recently mixed audio block (fed by both PE_TimelineRenderAudioRange and live

@@ -385,7 +385,19 @@ bool MediaSource::SeekAndDecodeVideo(int64_t targetPts, bool approximate, const 
     avcodec_flush_buffers(videoCodecCtx_);
 
     AVPacket* pkt = av_packet_alloc();
+    // Decode into `scratch`, moving each success into `outFrame`: avcodec_receive_frame unrefs its
+    // target at the START of its next (failing/EOF) call, so receiving directly into outFrame leaves
+    // it blank (format == AV_PIX_FMT_NONE) once a drain loop ends — even though a frame WAS decoded.
+    // That blank frame then reaches sws_scale and aborts (FFmpeg's format-descriptor assert). This is
+    // reached whenever targetPts is at/past the stream's last frame (e.g. exporting a clip's final
+    // frame), so outFrame must always hold the last VALID frame, never the post-drain blank one.
+    AVFrame* scratch = av_frame_alloc();
     bool gotFrame = false;
+    auto keepLatest = [&]() {
+        av_frame_unref(outFrame);
+        av_frame_move_ref(outFrame, scratch); // scratch is left blank, ready for the next receive
+        gotFrame = true;
+    };
 
     while (av_read_frame(formatCtx_, pkt) >= 0)
     {
@@ -393,6 +405,7 @@ bool MediaSource::SeekAndDecodeVideo(int64_t targetPts, bool approximate, const 
         {
             av_packet_unref(pkt);
             av_packet_free(&pkt);
+            av_frame_free(&scratch);
             outError = "cancelled";
             return false;
         }
@@ -407,33 +420,36 @@ bool MediaSource::SeekAndDecodeVideo(int64_t targetPts, bool approximate, const 
         {
             continue;
         }
-        while (avcodec_receive_frame(videoCodecCtx_, outFrame) == 0)
+        while (avcodec_receive_frame(videoCodecCtx_, scratch) == 0)
         {
-            gotFrame = true;
+            keepLatest();
             if (approximate)
             {
                 // First frame past the backward seek is the GOP's keyframe itself —
                 // the "nearest preceding keyframe" tolerance-seek result.
                 av_packet_free(&pkt);
+                av_frame_free(&scratch);
                 return true;
             }
             int64_t pts = outFrame->best_effort_timestamp != AV_NOPTS_VALUE ? outFrame->best_effort_timestamp : outFrame->pts;
             if (pts == AV_NOPTS_VALUE || pts >= targetPts)
             {
                 av_packet_free(&pkt);
+                av_frame_free(&scratch);
                 return true;
             }
         }
     }
 
-    // EOF: flush decoder for any frames still buffered.
+    // EOF: flush decoder for any frames still buffered, keeping the last one (see keepLatest).
     avcodec_send_packet(videoCodecCtx_, nullptr);
-    while (avcodec_receive_frame(videoCodecCtx_, outFrame) == 0)
+    while (avcodec_receive_frame(videoCodecCtx_, scratch) == 0)
     {
-        gotFrame = true;
+        keepLatest();
     }
 
     av_packet_free(&pkt);
+    av_frame_free(&scratch);
     if (!gotFrame)
     {
         outError = "no frame decoded (seek past end of stream?)";

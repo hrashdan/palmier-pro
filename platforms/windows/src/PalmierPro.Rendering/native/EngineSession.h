@@ -7,6 +7,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -54,6 +55,16 @@ public:
     int32_t OpenTimeline(const std::string& utf8SnapshotJson, PE_TimelineHandle* outHandle);
     int32_t CloseTimeline(PE_TimelineHandle handle);
 
+    // --- E5 export (export-v1.md §4-§9) — single-active-export-per-session orchestration. --------
+    // ExportStart runs the whole synchronous export (native/ExportSession) after claiming the
+    // session's one export slot (§4.1): a second concurrent call returns PE_ERROR_INVALID_ARGUMENT.
+    // ExportCancel sets the session-scoped cancel atomic the running export polls at decode/dispatch/
+    // encode boundaries (§8) — safe from any thread, a no-op (PE_OK) when no export is running.
+    // `timeline` must be a handle opened SOLELY for this export (§4.1) — the caller resolves it.
+    int32_t ExportStart(TimelineSession* timeline, const std::string& optionsJson,
+        const PE_ExportCallbacks& callbacks, PE_ExportResult* outResult);
+    int32_t ExportCancel();
+
     const char* LastErrorMessage() const { return lastError_.c_str(); }
     void SetLastError(std::string message) { lastError_ = std::move(message); }
     void ClearLastError() { lastError_.clear(); }
@@ -74,6 +85,11 @@ private:
     std::mutex mutex_;
     std::unordered_map<MediaSource*, std::unique_ptr<MediaSource>> mediaSources_;
     std::string lastError_;
+
+    // E5 export: at most one PE_ExportStart in flight per session (§4.1); exportCancel_ is the atomic
+    // PE_ExportCancel sets and the running ExportSession polls (§8).
+    std::atomic<bool> exportActive_{false};
+    std::atomic<int32_t> exportCancel_{0};
 
     std::recursive_mutex d3dMutex_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;

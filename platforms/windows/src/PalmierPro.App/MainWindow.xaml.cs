@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
         Shell.PropertyChanged += Shell_PropertyChanged;
         Shell.RequestQuit += (_, _) => Application.Current.Exit();
         Shell.ImportMediaRequested += (_, _) => _ = _editorView.RequestImportMediaAsync();
+        Shell.ExportRequested += (_, _) => _ = _editorView.RequestExportAsync();
 
         _homeView.Initialize(new HomeViewModel(Shell));
         MenuBarHost.Initialize(Shell);

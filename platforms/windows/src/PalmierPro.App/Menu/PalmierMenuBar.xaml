@@ -67,7 +67,7 @@
                 </MenuFlyoutItem.KeyboardAccelerators>
             </MenuFlyoutItem>
             <MenuFlyoutSeparator/>
-            <MenuFlyoutItem Text="Export…" Command="{x:Bind vm:DisabledMenuCommands.Export}">
+            <MenuFlyoutItem Text="Export…" Command="{x:Bind Shell.ExportCommand, Mode=OneWay}">
                 <MenuFlyoutItem.KeyboardAccelerators>
                     <KeyboardAccelerator Key="E" Modifiers="Control"/>
                 </MenuFlyoutItem.KeyboardAccelerators>

@@ -37,6 +37,7 @@ public sealed partial class ShellViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(UndoCommand))]
     [NotifyCanExecuteChangedFor(nameof(RedoCommand))]
     [NotifyCanExecuteChangedFor(nameof(ImportMediaCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ExportCommand))]
     [NotifyCanExecuteChangedFor(nameof(SplitAtPlayheadCommand))]
     [NotifyCanExecuteChangedFor(nameof(TrimStartToPlayheadCommand))]
     [NotifyCanExecuteChangedFor(nameof(TrimEndToPlayheadCommand))]
@@ -63,6 +64,10 @@ public sealed partial class ShellViewModel : ObservableObject
     /// EditorPlaceholderView), so ImportMediaCommand just raises this and lets MainWindow bridge
     /// it, keeping ShellViewModel WinUI-free.
     public event EventHandler? ImportMediaRequested;
+
+    /// Same bridging pattern as <see cref="ImportMediaRequested"/> — the Export dialog (M6) is
+    /// owned by EditorPlaceholderView, which MainWindow forwards this to.
+    public event EventHandler? ExportRequested;
 
     public ShellViewModel(ProjectRegistry registry, IProjectDialogService dialogs, Func<IVideoEngine>? engineFactory = null)
     {
@@ -203,6 +208,11 @@ public sealed partial class ShellViewModel : ObservableObject
 
     [RelayCommand(CanExecute = nameof(CanImportMedia))]
     private void ImportMedia() => ImportMediaRequested?.Invoke(this, EventArgs.Empty);
+
+    private bool CanExport() => ActiveDocument is not null;
+
+    [RelayCommand(CanExecute = nameof(CanExport))]
+    private void Export() => ExportRequested?.Invoke(this, EventArgs.Empty);
 
     // MARK: - Timeline editing (M3, Stage C) — mirrors MainMenuBuilder's Edit-menu timeline
     // section (Select Forward, Split/Trim to Playhead, Delete, Ripple Delete). CanExecute only

@@ -416,6 +416,12 @@ public static class AppThemeTokens
         public const double QueueProgressBarWidth = 96;
         public const double QueueProgressWidth = 32;
         public const double SheetWidthWithLog = SheetWidth + LogPaneWidth + BorderWidth.Hairline;
+
+        /// No Mac equivalent — SwiftUI's `@Observable` re-renders `ExportView`'s log automatically
+        /// on every `ExportJob` mutation; WinUI's `ExportJob` (Services.Export) carries no change
+        /// notification, so `ExportView` polls at this cadence instead (same pattern as
+        /// <see cref="AudioMeter.RefreshInterval"/>).
+        public const double QueueRefreshInterval = 1.0 / 6.0;
     }
 
     public static class Matte

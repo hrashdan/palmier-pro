@@ -14,8 +14,8 @@ namespace PalmierPro.App.ViewModels;
 /// placeholders; see `PalmierMenuBar.xaml`'s Edit-menu section.
 ///
 /// Stage C also landed the FCPXML/XMEML exporters (`PalmierPro.Services.Export`) and their
-/// `Services.ExportServices` registration point, but `Export` stays a NoOp here — the Export
-/// dialog (destination/format picker) is Stage F.
+/// `Services.ExportServices` registration point; Stage F (M6) landed the Export dialog itself —
+/// `Export` moved to `ShellViewModel.ExportCommand`, so it's no longer listed here.
 public static class DisabledMenuCommands
 {
     private static IRelayCommand NoOp() => new RelayCommand(() => { }, () => false);
@@ -23,7 +23,6 @@ public static class DisabledMenuCommands
     public static IRelayCommand About { get; } = NoOp();
     public static IRelayCommand CheckForUpdates { get; } = NoOp();
     public static IRelayCommand Settings { get; } = NoOp();
-    public static IRelayCommand Export { get; } = NoOp();
     public static IRelayCommand Cut { get; } = NoOp();
     public static IRelayCommand Copy { get; } = NoOp();
     public static IRelayCommand Paste { get; } = NoOp();

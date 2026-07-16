@@ -130,7 +130,15 @@ public static class TimelineSnapshotBuilder
     /// reported via <see cref="TimelineSnapshotBuildResult.PendingLottieBakes"/> without ever
     /// attempting a bake (a caller not yet wired up to a real service, e.g. most existing tests,
     /// gets the same "always pending" behavior the pre-E4.7 skip already had).
-    public static TimelineSnapshotBuildResult Build(ProjectFile project, string timelineId, MediaResolver mediaResolver, ILottieBakeService? lottieBakeService = null)
+    ///
+    /// `renderSizeOverride` (docs/export-v1.md §4.1) lets export target a canvas other than the
+    /// timeline's authoring size (e.g. a 1080p project exported at 4K) — it sets ONLY the snapshot's
+    /// output size; every Transform/Crop value is already canvas-normalized (0–1,
+    /// docs/timeline-snapshot-v1.md §5), so rendering the same snapshot at a different size needs no
+    /// rescaling. Mirrors the Mac's `CompositionBuilder.build(renderSize:)` taking an explicit override
+    /// independent of `Timeline.width`/`height`. Absent → today's `timeline.Width`/`Height` behavior.
+    public static TimelineSnapshotBuildResult Build(ProjectFile project, string timelineId, MediaResolver mediaResolver,
+        ILottieBakeService? lottieBakeService = null, (int Width, int Height)? renderSizeOverride = null)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentNullException.ThrowIfNull(mediaResolver);
@@ -173,8 +181,10 @@ public static class TimelineSnapshotBuilder
             Version = SchemaVersion,
             FpsNumerator = timeline.Fps,
             FpsDenominator = 1,
-            OutputWidth = timeline.Width,
-            OutputHeight = timeline.Height,
+            // Output size only — the BuildContext above stays on the authoring canvas so every
+            // normalized geometry value is unaffected (docs/export-v1.md §4.1).
+            OutputWidth = renderSizeOverride?.Width ?? timeline.Width,
+            OutputHeight = renderSizeOverride?.Height ?? timeline.Height,
             Tracks = tracks,
         };
         return new TimelineSnapshotBuildResult(snapshot, ctx.OfflineMediaRefs, ctx.PendingLottieBakes);

@@ -1,10 +1,12 @@
 #include "EngineSession.h"
+#include "ExportSession.h"
 #include "TimelineSession.h"
 #include "WicPngWriter.h"
 
 #include <windows.h>
 
 #include <cstdlib>
+#include <exception>
 
 EngineSession::~EngineSession() = default;
 
@@ -230,6 +232,40 @@ int32_t EngineSession::CloseTimeline(PE_TimelineHandle handle)
     timelineLru_.remove(handle);
     timelines_.erase(it);
     ClearLastError();
+    return PE_OK;
+}
+
+int32_t EngineSession::ExportStart(TimelineSession* timeline, const std::string& optionsJson,
+    const PE_ExportCallbacks& callbacks, PE_ExportResult* outResult)
+{
+    // Claim the session's single export slot (§4.1) — a second concurrent call fails loudly.
+    bool expected = false;
+    if (!exportActive_.compare_exchange_strong(expected, true))
+    {
+        SetLastError("PE_ExportStart: an export is already in progress on this session");
+        return PE_ERROR_INVALID_ARGUMENT;
+    }
+    exportCancel_.store(0, std::memory_order_relaxed);
+
+    int32_t status;
+    try
+    {
+        ExportSession exporter(this, timeline);
+        status = exporter.Run(optionsJson, callbacks, exportCancel_, outResult);
+    }
+    catch (const std::exception& ex)
+    {
+        SetLastError(std::string("PE_ExportStart threw: ") + ex.what());
+        status = PE_ERROR_UNKNOWN;
+    }
+    exportActive_.store(false, std::memory_order_relaxed);
+    return status;
+}
+
+int32_t EngineSession::ExportCancel()
+{
+    // Session-scoped; a no-op when no export is running (§8/§4.4). Safe from any thread.
+    exportCancel_.store(1, std::memory_order_relaxed);
     return PE_OK;
 }
 

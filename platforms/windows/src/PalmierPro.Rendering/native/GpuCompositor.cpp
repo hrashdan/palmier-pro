@@ -1083,6 +1083,27 @@ bool GpuCompositor::ComputeColorScopes(
     return scopes_->Compute(accum->srv.Get(), accum->width, accum->height, outResult, outError);
 }
 
+bool GpuCompositor::ComposeForExport(
+    const TimelineSnapshot& snapshot,
+    int64_t frame,
+    const ClipFrameProvider& provider,
+    const std::atomic<int32_t>* cancelFlag,
+    ID3D11ShaderResourceView*& outSrv,
+    int32_t& outWidth,
+    int32_t& outHeight,
+    std::string& outError)
+{
+    GpuTex* accum = nullptr;
+    if (!ComposeToAccumulator(snapshot, frame, provider, cancelFlag, accum, outError))
+    {
+        return false;
+    }
+    outSrv = accum->srv.Get();
+    outWidth = accum->width;
+    outHeight = accum->height;
+    return true;
+}
+
 bool GpuCompositor::ComposeToAccumulator(
     const TimelineSnapshot& snapshot,
     int64_t frame,
